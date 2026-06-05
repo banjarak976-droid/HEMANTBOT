@@ -5,28 +5,39 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ChatJoinRequestHandler, CommandHandler
 
-# ---------- CONFIG (from environment variables) ----------
+# ---------- ENVIRONMENT VARIABLES ----------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID", -1002059110504))
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN environment variable not set!")
+    exit(1)
+
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1002059110504"))
 CHANNEL_INVITE_LINK = os.environ.get("CHANNEL_INVITE_LINK", "https://t.me/+S8FFcl0FWvwwODg9")
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "7413252140").split(",")]
+
 VOICE_FILE = os.environ.get("VOICE_FILE", "hemant intro voice.ogg")
 APK_FILE = os.environ.get("APK_FILE", "BDG HEMANT PANEL.apk")
 VIDEO_FILE = os.environ.get("VIDEO_FILE", "video.mp4")
 
-WELCOME_TEXT = os.environ.get("WELCOME_TEXT", f"""👋 HELLO, BRO!
+WELCOME_TEXT = f"""👋 HELLO, BRO!
 ❌ AAPKA JOIN REQUEST APPROVE NAHI HUA HAI
 👏 LAKIN YE SUBSE JAADA IMPORTANT HAI JAAKAR CHECK KARIYE 🎉
 
 🔗 CHANNEL LINK: {CHANNEL_INVITE_LINK}
 
-📱 App, Voice Note, Video attached below 👇""")
+📱 App, Voice Note, Video attached below 👇"""
 
-# ---------- Database ----------
+# ---------- DATABASE ----------
 def init_db():
     conn = sqlite3.connect('bot_database.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS members (user_id INTEGER PRIMARY KEY, username TEXT, joined_date TEXT)''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS members (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            joined_date TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -55,22 +66,26 @@ def get_all_users():
     return users
 
 init_db()
+
 mode = "auto"
 
 async def send_welcome(bot, user_id):
-    await bot.send_message(user_id, WELCOME_TEXT)
-    await asyncio.sleep(0.3)
-    if os.path.exists(VOICE_FILE):
-        with open(VOICE_FILE, 'rb') as f:
-            await bot.send_voice(user_id, voice=f)
-    if os.path.exists(APK_FILE):
-        with open(APK_FILE, 'rb') as f:
-            await bot.send_document(user_id, document=f)
-    if VIDEO_FILE and os.path.exists(VIDEO_FILE):
-        with open(VIDEO_FILE, 'rb') as f:
-            await bot.send_video(user_id, video=f)
+    try:
+        await bot.send_message(user_id, WELCOME_TEXT)
+        await asyncio.sleep(0.3)
+        if os.path.exists(VOICE_FILE):
+            with open(VOICE_FILE, 'rb') as f:
+                await bot.send_voice(user_id, voice=f)
+        if os.path.exists(APK_FILE):
+            with open(APK_FILE, 'rb') as f:
+                await bot.send_document(user_id, document=f)
+        if VIDEO_FILE and os.path.exists(VIDEO_FILE):
+            with open(VIDEO_FILE, 'rb') as f:
+                await bot.send_video(user_id, video=f)
+    except Exception as e:
+        print(f"send_welcome error: {e}")
 
-async def handle_join_request(update, context):
+async def handle_join_request(update: Update, context):
     global mode
     req = update.chat_join_request
     uid = req.from_user.id
@@ -78,7 +93,6 @@ async def handle_join_request(update, context):
     add_member(uid, name)
     print(f"📥 Request from {name}")
 
-    # Send welcome package immediately
     await send_welcome(context.bot, uid)
 
     if mode == "auto":
@@ -86,39 +100,48 @@ async def handle_join_request(update, context):
             await context.bot.approve_chat_join_request(CHANNEL_ID, uid)
             await context.bot.send_message(uid, "✅ Request approved! Welcome.")
         except Exception as e:
-            print(e)
+            print(f"Auto approve error: {e}")
     else:
         await context.bot.send_message(ADMIN_IDS[0], f"🆕 Request from @{name}\n/accept {uid}")
 
-async def accept(update, context):
-    if update.effective_user.id not in ADMIN_IDS: return
-    if not context.args: return
+async def accept(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not context.args:
+        return
     uid = int(context.args[0])
     await context.bot.approve_chat_join_request(CHANNEL_ID, uid)
     add_member(uid, "manual")
     await update.message.reply_text(f"✅ Accepted {uid}")
 
-async def mode_cmd(update, context):
+async def mode_cmd(update: Update, context):
     global mode
-    if update.effective_user.id not in ADMIN_IDS: return
+    if update.effective_user.id not in ADMIN_IDS:
+        return
     if not context.args:
         await update.message.reply_text(f"Mode: {mode}")
         return
     m = context.args[0].lower()
-    if m in ['auto','manual']:
+    if m in ['auto', 'manual']:
         mode = m
-        await update.message.reply_text(f"Mode: {mode}")
+        await update.message.reply_text(f"✅ Mode changed to {mode}")
 
-async def stats(update, context):
+async def stats(update: Update, context):
     if update.effective_user.id in ADMIN_IDS:
         total = get_total()
         await update.message.reply_text(f"📊 Members: {total}\nMode: {mode}")
 
-async def broadcast(update, context):
-    if update.effective_user.id not in ADMIN_IDS: return
-    if not context.args: return
+async def broadcast(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /broadcast message")
+        return
     msg = ' '.join(context.args)
     users = get_all_users()
+    if not users:
+        await update.message.reply_text("No members.")
+        return
     success = 0
     for uid in users:
         try:
@@ -129,11 +152,18 @@ async def broadcast(update, context):
             pass
     await update.message.reply_text(f"✅ Sent to {success}/{len(users)}")
 
-async def start(update, context):
+async def start(update: Update, context):
     if update.effective_user.id in ADMIN_IDS:
-        await update.message.reply_text("Bot alive!\n/stats\n/broadcast\n/mode\n/accept")
+        await update.message.reply_text(
+            "🤖 Bot alive!\n"
+            "/stats - members\n"
+            "/broadcast <msg>\n"
+            "/mode auto/manual\n"
+            "/accept <user_id>"
+        )
 
 def main():
+    print("✅ Bot starting...")
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
     app.add_handler(CommandHandler("start", start))
