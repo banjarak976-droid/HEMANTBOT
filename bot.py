@@ -2,13 +2,14 @@ import os
 import asyncio
 import sqlite3
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import Application, ChatJoinRequestHandler, CommandHandler
+from telegram.request import HTTPXRequest
 
-# ---------- ENVIRONMENT VARIABLES ----------
+# ---------- CONFIG ----------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    print("❌ BOT_TOKEN environment variable not set!")
+    print("FATAL: BOT_TOKEN environment variable not set.")
     exit(1)
 
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1002059110504"))
@@ -28,18 +29,11 @@ WELCOME_TEXT = f"""👋 HELLO, BRO!
 📱 App, Voice Note, Video attached below 👇"""
 
 # ---------- DATABASE ----------
-def init_db():
-    conn = sqlite3.connect('bot_database.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS members (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            joined_date TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+conn = sqlite3.connect('bot_database.db')
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS members (user_id INTEGER PRIMARY KEY, username TEXT, joined_date TEXT)''')
+conn.commit()
+conn.close()
 
 def add_member(user_id, username):
     conn = sqlite3.connect('bot_database.db')
@@ -61,11 +55,7 @@ def get_all_users():
     conn = sqlite3.connect('bot_database.db')
     c = conn.cursor()
     c.execute('SELECT user_id FROM members')
-    users = [row[0] for row in c.fetchall()]
-    conn.close()
-    return users
-
-init_db()
+    return [row[0] for row in c.fetchall()]
 
 mode = "auto"
 
@@ -85,26 +75,24 @@ async def send_welcome(bot, user_id):
     except Exception as e:
         print(f"send_welcome error: {e}")
 
-async def handle_join_request(update: Update, context):
+async def handler(update: Update, context):
     global mode
     req = update.chat_join_request
     uid = req.from_user.id
     name = req.from_user.username or "NoUsername"
     add_member(uid, name)
-    print(f"📥 Request from {name}")
-
+    print(f"Request from {name}")
     await send_welcome(context.bot, uid)
-
     if mode == "auto":
         try:
             await context.bot.approve_chat_join_request(CHANNEL_ID, uid)
-            await context.bot.send_message(uid, "✅ Request approved! Welcome.")
+            await context.bot.send_message(uid, "✅ Approved! Welcome.")
         except Exception as e:
-            print(f"Auto approve error: {e}")
+            print(e)
     else:
-        await context.bot.send_message(ADMIN_IDS[0], f"🆕 Request from @{name}\n/accept {uid}")
+        await context.bot.send_message(ADMIN_IDS[0], f"Request from @{name}\n/accept {uid}")
 
-async def accept(update: Update, context):
+async def accept(update, context):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not context.args:
@@ -114,7 +102,7 @@ async def accept(update: Update, context):
     add_member(uid, "manual")
     await update.message.reply_text(f"✅ Accepted {uid}")
 
-async def mode_cmd(update: Update, context):
+async def mode_cmd(update, context):
     global mode
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -122,26 +110,21 @@ async def mode_cmd(update: Update, context):
         await update.message.reply_text(f"Mode: {mode}")
         return
     m = context.args[0].lower()
-    if m in ['auto', 'manual']:
+    if m in ['auto','manual']:
         mode = m
-        await update.message.reply_text(f"✅ Mode changed to {mode}")
+        await update.message.reply_text(f"Mode: {mode}")
 
-async def stats(update: Update, context):
+async def stats(update, context):
     if update.effective_user.id in ADMIN_IDS:
-        total = get_total()
-        await update.message.reply_text(f"📊 Members: {total}\nMode: {mode}")
+        await update.message.reply_text(f"Members: {get_total()}\nMode: {mode}")
 
-async def broadcast(update: Update, context):
+async def broadcast(update, context):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not context.args:
-        await update.message.reply_text("Usage: /broadcast message")
         return
     msg = ' '.join(context.args)
     users = get_all_users()
-    if not users:
-        await update.message.reply_text("No members.")
-        return
     success = 0
     for uid in users:
         try:
@@ -150,28 +133,23 @@ async def broadcast(update: Update, context):
             await asyncio.sleep(0.05)
         except:
             pass
-    await update.message.reply_text(f"✅ Sent to {success}/{len(users)}")
+    await update.message.reply_text(f"Sent to {success}/{len(users)}")
 
-async def start(update: Update, context):
+async def start(update, context):
     if update.effective_user.id in ADMIN_IDS:
-        await update.message.reply_text(
-            "🤖 Bot alive!\n"
-            "/stats - members\n"
-            "/broadcast <msg>\n"
-            "/mode auto/manual\n"
-            "/accept <user_id>"
-        )
+        await update.message.reply_text("Bot alive!\n/stats\n/broadcast\n/mode\n/accept")
 
 def main():
-    print("✅ Bot starting...")
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    print("Starting bot...")
+    request = HTTPXRequest(connect_timeout=30, read_timeout=30)
+    app = Application.builder().token(BOT_TOKEN).request(request).build()
+    app.add_handler(ChatJoinRequestHandler(handler))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("mode", mode_cmd))
     app.add_handler(CommandHandler("accept", accept))
-    print("✅ Bot is running...")
+    print("Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
